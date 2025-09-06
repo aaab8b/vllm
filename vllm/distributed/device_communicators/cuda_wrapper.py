@@ -105,6 +105,21 @@ class CudaRTLibrary:
         ),
     ]
 
+    # https://rocm.docs.amd.com/projects/HIPIFY/en/latest/tables/CUDA_Runtime_API_functions_supported_by_HIP.html # noqa
+    cuda_to_hip_mapping = {
+        "cudaSetDevice": "hipSetDevice",
+        "cudaDeviceSynchronize": "hipDeviceSynchronize",
+        "cudaDeviceReset": "hipDeviceReset",
+        "cudaGetErrorString": "hipGetErrorString",
+        "cudaMalloc": "hipMalloc",
+        "cudaFree": "hipFree",
+        "cudaMemset": "hipMemset",
+        "cudaMemcpy": "hipMemcpy",
+        "cudaIpcGetMemHandle": "hipIpcGetMemHandle",
+        "cudaIpcOpenMemHandle": "hipIpcOpenMemHandle",
+    }
+
+
     # class attribute to store the mapping from the path to the library
     # to avoid loading the same library multiple times
     path_to_library_cache: dict[str, Any] = {}
@@ -112,16 +127,23 @@ class CudaRTLibrary:
     # class attribute to store the mapping from library path
     #  to the corresponding dictionary
     path_to_dict_mapping: dict[str, dict[str, Any]] = {}
+    # check if the current process is using ROCm
+    is_rocm = False
 
     def __init__(self, so_file: Optional[str] = None):
         if so_file is None:
             so_file = find_loaded_library("libcudart")
             if so_file is None:
-                so_file = envs.VLLM_CUDART_SO_PATH  # fallback to env var
-            assert so_file is not None, (
-                "libcudart is not loaded in the current process, "
-                "try setting VLLM_CUDART_SO_PATH"
-            )
+                # so_file = envs.VLLM_CUDART_SO_PATH  # fallback to env var
+                so_file = find_loaded_library("libamdhip64")
+                self.is_rocm = True
+                if so_file is None:
+                    so_file = envs.VLLM_CUDART_SO_PATH 
+            assert so_file is not None, \
+                (
+                    "libcudart is not loaded in the current process, "
+                    "try setting VLLM_CUDART_SO_PATH"
+                )
         if so_file not in CudaRTLibrary.path_to_library_cache:
             lib = ctypes.CDLL(so_file)
             CudaRTLibrary.path_to_library_cache[so_file] = lib
@@ -130,7 +152,8 @@ class CudaRTLibrary:
         if so_file not in CudaRTLibrary.path_to_dict_mapping:
             _funcs = {}
             for func in CudaRTLibrary.exported_functions:
-                f = getattr(self.lib, func.name)
+                f = getattr(self.lib, CudaRTLibrary.cuda_to_hip_mapping[func.name] if self.is_rocm else
+                            func.name)
                 f.restype = func.restype
                 f.argtypes = func.argtypes
                 _funcs[func.name] = f
